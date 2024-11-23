@@ -9,6 +9,10 @@ from typing import Dict, List
 
 BACKEND_ENDPOINT = "http://localhost:8080"
 RUNNER_ENDPOINT = "http://localhost:8090"
+FRONTEND_ENDPOINT = "http://localhost:8000/send-message"
+
+waitingCustomers = np.array([[1,22],[2,72],[3,48]])
+customersInTransit = np.array([4,5])
 
 @dataclass
 class Scenario:
@@ -19,7 +23,8 @@ class Scenario:
     vehicle_positions: np.ndarray
 
     customers_ids: np.ndarray
-    customer_positions: np.ndarray
+    customer_src_positions: np.ndarray
+    customer_dst_positions: np.ndarray
 
 @dataclass
 class RoutingPlan:
@@ -27,6 +32,88 @@ class RoutingPlan:
 
     # mapping from vehicle_id to List[customer_id]
     mapping: Dict[str, List[str]]
+
+def initializeFrontend(scenario: Scenario):
+    scenario_data = requests.get(f"{RUNNER_ENDPOINT}/Scenarios/get_scenario/{scenario.scenario_id}").json()
+    vehicles = getStartingVehicles(scenario_data)
+    customers = getStartingCustomers(scenario_data)
+    return {
+        "vehicles": vehicles,
+        "customers": customers
+    }
+
+def getStartingVehicles(scenario):
+    vehicles = [[vehicle['id'], [vehicle['coordX']], vehicle['coordY']] for vehicle in scenario['vehicles']]
+    return vehicles
+
+def getStartingCustomers(scenario):
+    customers = [[customer['id'], [customer['coordX'], customer['coordY']], [customer['destinationX'], customer['destinationY']]] for customer in scenario['customers']]
+    return customers
+
+def getFrontendData(scenario: Scenario):
+    scenario_data = requests.get(f"{RUNNER_ENDPOINT}/Scenarios/get_scenario/{scenario['id']}").json()
+    totalTime = computeTotalTime(scenario_data)
+    waitingTime = computeWaitingTime(scenario_data)
+    averageWaitingTime = (np.array(waitingTime)[:, 1]).astype(int).mean()
+    activeTimes = computeActiveTime(scenario_data)
+    averageUtilization = (np.array(activeTimes)[:, 1]).astype(int).mean()
+    loadBigger75 = [[vehicle, activeTime] for vehicle, activeTime in activeTimes if activeTime > 0.75 * totalTime.total_seconds()]
+    loadSmaler25 = [[vehicle, activeTime] for vehicle, activeTime in activeTimes if activeTime < 0.25 * totalTime.total_seconds()]
+    waitingCustomers = computeWaitingTime(scenario_data)
+    extremeWaitTime = [[customer[0], customer[1]] for customer in waitingCustomers if customer[1] > 10 * 60]
+    customersInTransit = computeCustomerInTransit(scenario_data)
+    droppedCustomers = computeDroppedCustomers(scenario_data)
+    currentDistance = computeCurrentDistance(scenario_data)
+    
+    return {
+            "key": "update",
+            "value": {
+                "totalTime": str(totalTime),
+                "averageWait": averageWaitingTime,
+                "averageUtilization": averageUtilization,
+                "loadBigger75": loadBigger75,
+                "loadSmaler25": loadSmaler25,
+                "extremeWaitTime": extremeWaitTime,
+                "waitingCustomers": waitingCustomers,
+                "customersOnTransit": customersInTransit,
+                "dropedCustomers": droppedCustomers,
+                "currentDistance": currentDistance
+            }
+        }
+
+def computeTotalTime(scenario):
+    start_time = datetime.fromisoformat(scenario["startTime"])
+    if scenario['status'] != 'COMPLETED':
+        end_time = datetime.utcnow()
+    else:
+        end_time = datetime.fromisoformat(scenario["endTime"])
+    totalTime = end_time - start_time
+    return totalTime
+
+def computeWaitingTime(scenario):
+    if scenario['status'] == 'RUNNING':
+        waitingCustomers1 = waitingCustomers
+    else:
+        waitingCustomers1 = scenario['customers']
+    waitingTime = waitingCustomers1
+    return np.array(waitingTime)
+
+def computeActiveTime(scenario):
+    return [[vehicle['id'], vehicle['activeTime']] for vehicle in scenario['vehicles']]
+
+
+def computeWaitTime(scenario):
+    customers = scenario['customers']
+
+def computeDroppedCustomers(scenario):
+    return [[vehicle['id'], vehicle['distanceTravelled']] for vehicle in scenario['vehicles']]
+
+def computeCustomerInTransit(scenario):
+    return customersInTransit
+
+
+def computeCurrentDistance(scenario):
+    return [[vehicle['id'], vehicle['distanceTravelled']] for vehicle in scenario['vehicles']]
 
 def delete_scenarios():
     scenarios = requests.get(f"{BACKEND_ENDPOINT}/scenarios").json()
@@ -61,9 +148,14 @@ def create_scenario(num_vehicles=5, num_customers=10, speed=0.2):
     ]).transpose()
 
     customers_ids = np.array([customer["id"] for customer in customers])
-    customer_positions = np.stack([
+    customer_src_positions = np.stack([
         np.array([customer["coordX"] for customer in customers]),
         np.array([customer["coordY"] for customer in customers]),
+    ]).transpose()
+
+    customer_dest_positions = np.stack([
+        np.array([customer["destinationX"] for customer in customers]),
+        np.array([customer["destinationY"] for customer in customers]),
     ]).transpose()
 
     return Scenario(
@@ -72,7 +164,8 @@ def create_scenario(num_vehicles=5, num_customers=10, speed=0.2):
         vehicle_ids,
         vehicle_positions,
         customers_ids,
-        customer_positions,
+        customer_src_positions,
+        customer_dest_positions,
     )
 
 def wait_for_vehicle(scenario: Scenario, vehicle_id: str):
@@ -117,12 +210,26 @@ def run_vehicle(routing_plan: RoutingPlan, vehicle_id: str):
         add_customer_to_vehicle(routing_plan.scenario, vehicle_id, customer_id)
         wait_for_vehicle(routing_plan.scenario, vehicle_id)
 
+def run_ui(scenario: Scenario):
+    frontend_data = getFrontendData(scenario)
+    response = requests.get(FRONTEND_ENDPOINT, json=frontend_data)
+    assert response.status_code == 200
+    time.sleep(1)
+
 def run_scenario(routing_plan: RoutingPlan):
     threads = []
+    initialize_data = initializeFrontend(routing_plan.scenario)
+    response = requests.get(FRONTEND_ENDPOINT, json=initialize_data)
+    assert response.status_code == 200
+
     for vehicle_id in routing_plan.mapping.keys():
         thread = threading.Thread(target=run_vehicle, args=(routing_plan, vehicle_id))
         thread.start()
         threads.append(thread)
+
+    ui_thread = threading.Thread(target=run_ui, args=(routing_plan.scenario, ))
+    ui_thread.start()
+    threads.append(ui_thread)
     
     for thread in threads:
         thread.join()
