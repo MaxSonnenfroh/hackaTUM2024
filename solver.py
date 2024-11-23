@@ -84,7 +84,7 @@ class VRP(RoutingSolver):
 
 delete_scenarios() 
 sjf = ShortestJobFirstAdaptive()
-scenario = create_scenario()
+scenario = create_scenario(10, 40, 0.01)
 plan = sjf(scenario)
 
 mapping = plan.mapping

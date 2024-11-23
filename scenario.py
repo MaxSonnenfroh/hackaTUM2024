@@ -10,6 +10,7 @@ from typing import Dict, List
 BACKEND_ENDPOINT = "http://localhost:8080"
 RUNNER_ENDPOINT = "http://localhost:8090"
 FRONTEND_ENDPOINT = "http://localhost:8000/send-message"
+COMPLETED = False
 
 waitingCustomers = np.array([[1,22],[2,72],[3,48]])
 customersInTransit = np.array([4,5])
@@ -202,8 +203,8 @@ def get_final_info(scenario: Scenario):
     response = requests.get(f"{RUNNER_ENDPOINT}/Scenarios/get_scenario/{scenario.scenario_id}").json()
     return (
         response["status"],
-        datetime.fromisoformat(response["startTime"]),
-        datetime.fromisoformat(response["endTime"]),
+        response["startTime"],
+        response["endTime"],
     )
 
 def run_vehicle(routing_plan: RoutingPlan, vehicle_id: str):
@@ -214,10 +215,11 @@ def run_vehicle(routing_plan: RoutingPlan, vehicle_id: str):
         wait_for_vehicle(routing_plan.scenario, vehicle_id)
 
 def run_ui(scenario: Scenario):
-    frontend_data = getFrontendData(scenario)
-    response = requests.get(FRONTEND_ENDPOINT, json=frontend_data)
-    assert response.status_code == 200
-    time.sleep(1)
+    while not COMPLETED:
+        frontend_data = getFrontendData(scenario)
+        response = requests.get(FRONTEND_ENDPOINT, json=frontend_data)
+        assert response.status_code == 200
+        time.sleep(1)
 
 def run_scenario(routing_plan: RoutingPlan):
     threads = []
@@ -232,10 +234,14 @@ def run_scenario(routing_plan: RoutingPlan):
 
     ui_thread = threading.Thread(target=run_ui, args=(routing_plan.scenario, ))
     ui_thread.start()
-    threads.append(ui_thread)
     
     for thread in threads:
         thread.join()
 
+    global COMPLETED
+    COMPLETED = True
+    ui_thread.join()
+
     status, start, end = get_final_info(routing_plan.scenario)
+
     print(status, start, end)
