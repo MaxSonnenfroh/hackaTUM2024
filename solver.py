@@ -47,7 +47,7 @@ class ShortestJobFirstAdaptive(RoutingSolver):
         c_pos = scenario.customer_src_positions
 
         # boolean mask for waiting customers
-        c_waiting = np.ones(c_pos.shape[0], dtype=np.bool)
+        c_waiting = np.ones(c_pos.shape[0], dtype=bool)
 
         # calculate squared distance for every pair
         dist = np.sqrt(np.square(v_pos[:, None] - c_pos[None]).sum(axis=-1))
