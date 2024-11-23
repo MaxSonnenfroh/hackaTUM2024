@@ -6,6 +6,4 @@ def test_message(message):
     assert response.status_code == 200
 
 # Run the test
-test_message({"message": "Hello, World!"})
-# Output: {"message": "Hello, World!"}
-test_message({"message": "Goodbye, World!"})
+test_message({"type": "totalTime", "value": 100})
