@@ -38,8 +38,11 @@ def initializeFrontend(scenario: Scenario):
     vehicles = getStartingVehicles(scenario_data)
     customers = getStartingCustomers(scenario_data)
     return {
-        "vehicles": vehicles,
-        "customers": customers
+        "key": "init",
+        "value": {
+            "vehicles": vehicles,
+            "customers": customers
+        }
     }
 
 def getStartingVehicles(scenario):
