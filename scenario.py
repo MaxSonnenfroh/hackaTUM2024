@@ -46,15 +46,15 @@ def initializeFrontend(scenario: Scenario):
     }
 
 def getStartingVehicles(scenario):
-    vehicles = [[vehicle['id'], [vehicle['coordX']], vehicle['coordY']] for vehicle in scenario['vehicles']]
+    vehicles = [{"id": vehicle['id'], "startCoordinate":{ "latitude":vehicle['coordX'], "longitude":vehicle['coordY']}} for vehicle in scenario['vehicles']]
     return vehicles
 
 def getStartingCustomers(scenario):
-    customers = [[customer['id'], [customer['coordX'], customer['coordY']], [customer['destinationX'], customer['destinationY']]] for customer in scenario['customers']]
+    customers = [{"id": customer['id'],"startCoordinate": { "latitude":customer['coordX'], "longitude": customer['coordY']},"destinationCoordinate": {"latitude": customer['destinationX'], "longitude": customer['destinationY']}} for customer in scenario['customers']]
     return customers
 
 def getFrontendData(scenario: Scenario):
-    scenario_data = requests.get(f"{RUNNER_ENDPOINT}/Scenarios/get_scenario/{scenario['id']}").json()
+    scenario_data = requests.get(f"{RUNNER_ENDPOINT}/Scenarios/get_scenario/{scenario.scenario_id}").json()
     totalTime = computeTotalTime(scenario_data)
     waitingTime = computeWaitingTime(scenario_data)
     averageWaitingTime = (np.array(waitingTime)[:, 1]).astype(int).mean()
@@ -77,8 +77,8 @@ def getFrontendData(scenario: Scenario):
                 "loadBigger75": loadBigger75,
                 "loadSmaler25": loadSmaler25,
                 "extremeWaitTime": extremeWaitTime,
-                "waitingCustomers": waitingCustomers,
-                "customersOnTransit": customersInTransit,
+                "waitingCustomers": waitingCustomers.tolist(),
+                "customersOnTransit": customersInTransit.tolist(),
                 "dropedCustomers": droppedCustomers,
                 "currentDistance": currentDistance
             }
