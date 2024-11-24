@@ -117,7 +117,7 @@ def computeCustomerInTransit(scenario):
 
 
 def computeCurrentDistance(scenario):
-    return [[vehicle['id'], vehicle['distanceTravelled']] for vehicle in scenario['vehicles']]
+    return {vehicle['id']:  vehicle['distanceTravelled'] for vehicle in scenario['vehicles']}
 
 def delete_scenarios():
     scenarios = requests.get(f"{BACKEND_ENDPOINT}/scenarios").json()
