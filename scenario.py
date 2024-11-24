@@ -16,6 +16,7 @@ list_lock = threading.Lock()
 
 waitingCustomers = []
 customersInTransit = []
+waitingTimes = {}
 
 @dataclass
 class Scenario:
@@ -65,13 +66,13 @@ def getFrontendData(scenario: Scenario):
     scenario_data = requests.get(f"{RUNNER_ENDPOINT}/Scenarios/get_scenario/{scenario.scenario_id}").json()
     totalTime = computeTotalTime(scenario_data)
     waitingTime = computeWaitingTime(scenario_data)
-    averageWaitingTime = (np.array(waitingTime)[:, 1]).astype(int).mean()
+    averageWaitingTime = (np.array(waitingTime)).astype(int).mean()
     activeTimes = computeActiveTime(scenario_data)
     averageUtilization = (np.array(activeTimes)[:, 1]).astype(int).mean() / totalTime.total_seconds()
     loadBigger75 = [[vehicle, activeTime] for vehicle, activeTime in activeTimes if activeTime > 0.75 * totalTime.total_seconds()]
     loadSmaler25 = [[vehicle, activeTime] for vehicle, activeTime in activeTimes if activeTime < 0.25 * totalTime.total_seconds()]
     waitingCustomers = computeWaitingTime(scenario_data)
-    extremeWaitTime = [[customer[0], customer[1]] for customer in waitingCustomers if customer[1].astype(int) > 10 * 60]
+    extremeWaitTime = [{"id": id, "time": time} for id, time in waitingTimes.items() if time > averageWaitingTime*1.5]
     droppedCustomers = computeDroppedCustomers(scenario_data)
     currentDistance = computeCurrentDistance(scenario_data)
     
@@ -80,6 +81,7 @@ def getFrontendData(scenario: Scenario):
             "value": {
                 "totalTime": str(totalTime),
                 "averageWait": averageWaitingTime,
+                "waitTimes": waitingTimes,
                 "averageUtilization": averageUtilization,
                 "loadBigger75": loadBigger75,
                 "loadSmaler25": loadSmaler25,
@@ -102,17 +104,13 @@ def computeTotalTime(scenario):
 
 def computeWaitingTime(scenario):
     if scenario['status'] == 'RUNNING':
-        waitingCustomers1 = waitingCustomers
+        waitTime = [time for time in waitingTimes.values()]
     else:
-        waitingCustomers1 = [["",0]]
-    waitingTime = waitingCustomers1
-    return np.array(waitingTime)
+        waitTime = [0]
+    return waitTime
 
 def computeActiveTime(scenario):
     return [[vehicle['id'], vehicle['activeTime']] for vehicle in scenario['vehicles']]
-
-def computeWaitTime(scenario):
-    customers = scenario['customers']
 
 def computeDroppedCustomers(scenario):
     return [customer['id'] for customer in scenario['customers'] if not customer['awaitingService']]
@@ -188,7 +186,8 @@ def wait_for_vehicle(scenario: Scenario, vehicle_id: str):
             time.sleep(sleep_time + 1)
         else:
             with list_lock:
-                customersInTransit.remove(customer_id)
+                if customer_id in customersInTransit:
+                    customersInTransit.remove(customer_id)
             break
 
 def add_customer_to_vehicle(scenario: Scenario, vehicle_id: str, customer_id: str):
@@ -201,9 +200,13 @@ def add_customer_to_vehicle(scenario: Scenario, vehicle_id: str, customer_id: st
     if "failedToUpdate" in response:
         raise Exception("Could not update vehicle")
     
+    
+    
     with list_lock:
         customersInTransit.append(customer_id)
         waitingCustomers.remove(customer_id)
+        waitingTimes[customer_id] = response['updatedVehicles'][0]['remainingTravelTime']
+
     
     print(f"Vehicle {vehicle_id} driving to {customer_id}, estimated time: {response['updatedVehicles'][0]['remainingTravelTime'] * scenario.scenario_speed}")
 
