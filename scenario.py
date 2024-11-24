@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 import requests
 import numpy as np
 import threading
@@ -17,6 +18,7 @@ list_lock = threading.Lock()
 waitingCustomers = []
 customersInTransit = []
 waitingTimes = {}
+waitTimeHistory = []
 
 @dataclass
 class Scenario:
@@ -63,50 +65,50 @@ def getStartingCustomers(scenario):
     return customers
 
 def getFrontendData(scenario: Scenario):
-    scenario_data = requests.get(f"{RUNNER_ENDPOINT}/Scenarios/get_scenario/{scenario.scenario_id}").json()
-    totalTime = computeTotalTime(scenario_data)
-    waitingTime = computeWaitingTime(scenario_data)
-    averageWaitingTime = (np.array(waitingTime)).astype(int).mean()
-    activeTimes = computeActiveTime(scenario_data)
-    averageUtilization = (np.array(activeTimes)[:, 1]).astype(int).mean() / totalTime.total_seconds()
-    loadBigger75 = [[vehicle, activeTime] for vehicle, activeTime in activeTimes if activeTime > 0.75 * totalTime.total_seconds()]
-    loadSmaler25 = [[vehicle, activeTime] for vehicle, activeTime in activeTimes if activeTime < 0.25 * totalTime.total_seconds()]
-    waitingCustomers = computeWaitingTime(scenario_data)
-    extremeWaitTime = [{"id": id, "time": time} for id, time in waitingTimes.items() if time > averageWaitingTime*1.5]
-    droppedCustomers = computeDroppedCustomers(scenario_data)
-    currentDistance = computeCurrentDistance(scenario_data)
-    
-    return {
-            "key": "update",
-            "value": {
-                "totalTime": str(totalTime),
-                "averageWait": averageWaitingTime,
-                "waitTimes": waitingTimes,
-                "averageUtilization": averageUtilization,
-                "loadBigger75": loadBigger75,
-                "loadSmaler25": loadSmaler25,
-                "extremeWaitTime": extremeWaitTime,
-                "waitingCustomers": waitingCustomers,
-                "customersOnTransit": customersInTransit,
-                "dropedCustomers": droppedCustomers,
-                "currentDistance": currentDistance
+        scenario_data = requests.get(f"{RUNNER_ENDPOINT}/Scenarios/get_scenario/{scenario.scenario_id}").json()
+        totalTime = computeTotalTime(scenario_data, scenario.scenario_speed)
+        waitingTime = computeWaitingTime(scenario_data)
+        if waitingTime != [0]:
+            averageWaitingTime = (np.array(waitingTime)).astype(int).mean()
+        activeTimes = computeActiveTime(scenario_data)
+        averageUtilization = (np.array(activeTimes)[:, 1]).astype(int).mean() / totalTime.total_seconds()
+        loadBigger75 = [{"id": vehicle, "percentage": activeTime/10000} for vehicle, activeTime in activeTimes if activeTime > 0.75 * totalTime.total_seconds()]
+        loadSmaler25 = [{"id": vehicle, "percentage": activeTime/10000} for vehicle, activeTime in activeTimes if activeTime < 0.25 * totalTime.total_seconds()]
+        extremeWaitTime = [{"id": id, "time": time} for id, time in waitingTimes.items() if time > averageWaitingTime*1.5]
+        droppedCustomers = computeDroppedCustomers(scenario_data)
+        currentDistance = computeCurrentDistance(scenario_data)
+        
+        return {
+                "key": "update",
+                "value": {
+                    "totalTime": str(totalTime),
+                    "averageWait": averageWaitingTime,
+                    "waitTimes": waitingTimes,
+                    "averageUtilization": averageUtilization,
+                    "loadBigger75": loadBigger75,
+                    "loadSmaler25": loadSmaler25,
+                    "extremeWaitTime": extremeWaitTime,
+                    "waitingCustomers": waitingCustomers,
+                    "customersOnTransit": customersInTransit,
+                    "dropedCustomers": droppedCustomers,
+                    "currentDistance": currentDistance
+                }
             }
-        }
 
-def computeTotalTime(scenario):
+def computeTotalTime(scenario, speed):
     start_time = datetime.fromisoformat(scenario["startTime"])
     if scenario['status'] != 'COMPLETED':
         end_time = datetime.utcnow()
     else:
         end_time = datetime.fromisoformat(scenario["endTime"])
     totalTime = end_time - start_time
-    return totalTime
+    return totalTime / speed
 
 def computeWaitingTime(scenario):
-    if scenario['status'] == 'RUNNING':
+    if scenario['status'] == 'RUNNING' and len(waitingTimes.values()) > 0:
         waitTime = [time for time in waitingTimes.values()]
     else:
-        waitTime = [0]
+        waitTime = [time for time in waitingTimes.values()]#[0]
     return waitTime
 
 def computeActiveTime(scenario):
@@ -172,6 +174,7 @@ def create_scenario(num_vehicles=5, num_customers=10, speed=0.2):
     )
 
 def wait_for_vehicle(scenario: Scenario, vehicle_id: str):
+    last_customer_id = None
     while True:
         response = requests.get(f"{RUNNER_ENDPOINT}/Scenarios/get_scenario/{scenario.scenario_id}").json()
         vehicle = [vehicle for vehicle in response["vehicles"] if vehicle["id"] == vehicle_id]
@@ -180,14 +183,19 @@ def wait_for_vehicle(scenario: Scenario, vehicle_id: str):
             raise Exception("Vehicle does not exist")
     
         customer_id = vehicle[0]["customerId"]
+        if customer_id != last_customer_id and customer_id is not None:
+            last_customer_id = customer_id
+
+        # If the vehicle is not finished, sleep for the remaining travel time
         if customer_id is not None:
             sleep_time = vehicle[0]["remainingTravelTime"] * scenario.scenario_speed
             print(f"Vehicle {vehicle_id} not finished; sleeping for {sleep_time}s")
             time.sleep(sleep_time + 1)
-        else:
+        else: # never reached, since customer_id is never reset to None => use isAvailable instead
+            print(f"1) Vehicle {vehicle_id} with customer {last_customer_id} finished")
             with list_lock:
-                if customer_id in customersInTransit:
-                    customersInTransit.remove(customer_id)
+                if last_customer_id in customersInTransit:
+                    customersInTransit.remove(last_customer_id)
             break
 
 def add_customer_to_vehicle(scenario: Scenario, vehicle_id: str, customer_id: str):
@@ -200,15 +208,17 @@ def add_customer_to_vehicle(scenario: Scenario, vehicle_id: str, customer_id: st
     if "failedToUpdate" in response:
         raise Exception("Could not update vehicle")
     
-    
-    
     with list_lock:
-        customersInTransit.append(customer_id)
-        waitingCustomers.remove(customer_id)
+        if customer_id not in customersInTransit:
+            customersInTransit.append(customer_id)
+        if customer_id in waitingCustomers:
+            waitingCustomers.remove(customer_id)
         waitingTimes[customer_id] = response['updatedVehicles'][0]['remainingTravelTime']
 
+        print(f"Customers in transit: {customersInTransit}, waiting customers: {waitingCustomers}")
+
     
-    print(f"Vehicle {vehicle_id} driving to {customer_id}, estimated time: {response['updatedVehicles'][0]['remainingTravelTime'] * scenario.scenario_speed}")
+    print(f"Vehicle {vehicle_id} driving with customer {customer_id}, estimated time: {response['updatedVehicles'][0]['remainingTravelTime'] * scenario.scenario_speed}")
 
 def get_final_info(scenario: Scenario):
     response = requests.get(f"{RUNNER_ENDPOINT}/Scenarios/get_scenario/{scenario.scenario_id}").json()
@@ -222,6 +232,7 @@ def run_vehicle(routing_plan: RoutingPlan, vehicle_id: str):
     customers = routing_plan.mapping[vehicle_id]
 
     for customer_id in customers:
+        print(f"Adding customer {customer_id} to vehicle {vehicle_id}")
         add_customer_to_vehicle(routing_plan.scenario, vehicle_id, customer_id)
         wait_for_vehicle(routing_plan.scenario, vehicle_id)
 
@@ -230,7 +241,7 @@ def run_ui(scenario: Scenario):
         frontend_data = getFrontendData(scenario)
         response = requests.get(FRONTEND_ENDPOINT, json=frontend_data)
         assert response.status_code == 200
-        time.sleep(1)
+        time.sleep(0.5)
 
 def run_scenario(routing_plan: RoutingPlan):
     threads = []
