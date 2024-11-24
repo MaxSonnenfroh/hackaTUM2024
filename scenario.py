@@ -12,8 +12,10 @@ RUNNER_ENDPOINT = "http://localhost:8090"
 FRONTEND_ENDPOINT = "http://localhost:8000/send-message"
 COMPLETED = False
 
-waitingCustomers = np.array([[1,22],[2,72],[3,48]])
-customersInTransit = np.array([4,5])
+list_lock = threading.Lock()
+
+waitingCustomers = []
+customersInTransit = []
 
 @dataclass
 class Scenario:
@@ -36,6 +38,11 @@ class RoutingPlan:
 
 def initializeFrontend(scenario: Scenario):
     scenario_data = requests.get(f"{RUNNER_ENDPOINT}/Scenarios/get_scenario/{scenario.scenario_id}").json()
+
+    with list_lock:
+        global waitingCustomers
+        waitingCustomers = scenario.customers_ids.tolist()
+
     vehicles = getStartingVehicles(scenario_data)
     customers = getStartingCustomers(scenario_data)
     return {
@@ -65,7 +72,6 @@ def getFrontendData(scenario: Scenario):
     loadSmaler25 = [[vehicle, activeTime] for vehicle, activeTime in activeTimes if activeTime < 0.25 * totalTime.total_seconds()]
     waitingCustomers = computeWaitingTime(scenario_data)
     extremeWaitTime = [[customer[0], customer[1]] for customer in waitingCustomers if customer[1].astype(int) > 10 * 60]
-    customersInTransit = computeCustomerInTransit(scenario_data)
     droppedCustomers = computeDroppedCustomers(scenario_data)
     currentDistance = computeCurrentDistance(scenario_data)
     
@@ -78,8 +84,8 @@ def getFrontendData(scenario: Scenario):
                 "loadBigger75": loadBigger75,
                 "loadSmaler25": loadSmaler25,
                 "extremeWaitTime": extremeWaitTime,
-                "waitingCustomers": waitingCustomers.tolist(),
-                "customersOnTransit": customersInTransit.tolist(),
+                "waitingCustomers": waitingCustomers,
+                "customersOnTransit": customersInTransit,
                 "dropedCustomers": droppedCustomers,
                 "currentDistance": currentDistance
             }
@@ -105,16 +111,11 @@ def computeWaitingTime(scenario):
 def computeActiveTime(scenario):
     return [[vehicle['id'], vehicle['activeTime']] for vehicle in scenario['vehicles']]
 
-
 def computeWaitTime(scenario):
     customers = scenario['customers']
 
 def computeDroppedCustomers(scenario):
     return [customer['id'] for customer in scenario['customers'] if not customer['awaitingService']]
-
-def computeCustomerInTransit(scenario):
-    return customersInTransit
-
 
 def computeCurrentDistance(scenario):
     return [[vehicle['id'], vehicle['distanceTravelled']] for vehicle in scenario['vehicles']]
@@ -180,11 +181,14 @@ def wait_for_vehicle(scenario: Scenario, vehicle_id: str):
         if not vehicle:
             raise Exception("Vehicle does not exist")
     
-        if vehicle[0]["customerId"] is not None:
+        customer_id = vehicle[0]["customerId"]
+        if customer_id is not None:
             sleep_time = vehicle[0]["remainingTravelTime"] * scenario.scenario_speed
             print(f"Vehicle {vehicle_id} not finished; sleeping for {sleep_time}s")
             time.sleep(sleep_time + 1)
         else:
+            with list_lock:
+                customersInTransit.remove(customer_id)
             break
 
 def add_customer_to_vehicle(scenario: Scenario, vehicle_id: str, customer_id: str):
@@ -196,6 +200,10 @@ def add_customer_to_vehicle(scenario: Scenario, vehicle_id: str, customer_id: st
 
     if "failedToUpdate" in response:
         raise Exception("Could not update vehicle")
+    
+    with list_lock:
+        customersInTransit.append(customer_id)
+        waitingCustomers.remove(customer_id)
     
     print(f"Vehicle {vehicle_id} driving to {customer_id}, estimated time: {response['updatedVehicles'][0]['remainingTravelTime'] * scenario.scenario_speed}")
 
