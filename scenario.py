@@ -60,11 +60,11 @@ def getFrontendData(scenario: Scenario):
     waitingTime = computeWaitingTime(scenario_data)
     averageWaitingTime = (np.array(waitingTime)[:, 1]).astype(int).mean()
     activeTimes = computeActiveTime(scenario_data)
-    averageUtilization = (np.array(activeTimes)[:, 1]).astype(int).mean()
+    averageUtilization = (np.array(activeTimes)[:, 1]).astype(int).mean() / totalTime.total_seconds()
     loadBigger75 = [[vehicle, activeTime] for vehicle, activeTime in activeTimes if activeTime > 0.75 * totalTime.total_seconds()]
     loadSmaler25 = [[vehicle, activeTime] for vehicle, activeTime in activeTimes if activeTime < 0.25 * totalTime.total_seconds()]
     waitingCustomers = computeWaitingTime(scenario_data)
-    extremeWaitTime = [[customer[0], customer[1]] for customer in waitingCustomers if customer[1] > 10 * 60]
+    extremeWaitTime = [[customer[0], customer[1]] for customer in waitingCustomers if customer[1].astype(int) > 10 * 60]
     customersInTransit = computeCustomerInTransit(scenario_data)
     droppedCustomers = computeDroppedCustomers(scenario_data)
     currentDistance = computeCurrentDistance(scenario_data)
@@ -98,7 +98,7 @@ def computeWaitingTime(scenario):
     if scenario['status'] == 'RUNNING':
         waitingCustomers1 = waitingCustomers
     else:
-        waitingCustomers1 = scenario['customers']
+        waitingCustomers1 = [["",0]]
     waitingTime = waitingCustomers1
     return np.array(waitingTime)
 
@@ -110,7 +110,7 @@ def computeWaitTime(scenario):
     customers = scenario['customers']
 
 def computeDroppedCustomers(scenario):
-    return [[vehicle['id'], vehicle['distanceTravelled']] for vehicle in scenario['vehicles']]
+    return [customer['id'] for customer in scenario['customers'] if not customer['awaitingService']]
 
 def computeCustomerInTransit(scenario):
     return customersInTransit
@@ -241,6 +241,9 @@ def run_scenario(routing_plan: RoutingPlan):
     global COMPLETED
     COMPLETED = True
     ui_thread.join()
+
+    frontend_data = getFrontendData(routing_plan.scenario)
+    response = requests.get(FRONTEND_ENDPOINT, json=frontend_data)
 
     status, start, end = get_final_info(routing_plan.scenario)
 
